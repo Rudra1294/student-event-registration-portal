@@ -1,40 +1,67 @@
 const nodemailer = require('nodemailer');
 
+let transporterPromise;
+
+function getTransporter() {
+    if (!transporterPromise) {
+        transporterPromise = (async () => {
+            const usesSmtp = Boolean(process.env.SMTP_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASS);
+            if (usesSmtp) {
+                const port = Number(process.env.SMTP_PORT) || 587;
+                return {
+                    transporter: nodemailer.createTransport({
+                        host: process.env.SMTP_HOST,
+                        port,
+                        secure: process.env.SMTP_SECURE
+                            ? process.env.SMTP_SECURE === 'true'
+                            : port === 465,
+                        auth: {
+                            user: process.env.EMAIL_USER,
+                            pass: process.env.EMAIL_PASS,
+                        },
+                    }),
+                    isPreview: false
+                };
+            }
+
+            const testAccount = await nodemailer.createTestAccount();
+            return {
+                transporter: nodemailer.createTransport({
+                    host: testAccount.smtp.host,
+                    port: testAccount.smtp.port,
+                    secure: testAccount.smtp.secure,
+                    auth: {
+                        user: testAccount.user,
+                        pass: testAccount.pass,
+                    },
+                }),
+                isPreview: true
+            };
+        })();
+    }
+    return transporterPromise;
+}
+
 const sendEmail = async (options) => {
     try {
-        // 1. Generate a temporary Ethereal test account automatically
-        const testAccount = await nodemailer.createTestAccount();
+        const { transporter, isPreview } = await getTransporter();
 
-        // 2. Create the transporter using the temporary account credentials
-        const transporter = nodemailer.createTransport({
-            host: testAccount.smtp.host,
-            port: testAccount.smtp.port,
-            secure: testAccount.smtp.secure, // true for 465, false for other ports
-            auth: {
-                user: testAccount.user, // generated ethereal user
-                pass: testAccount.pass, // generated ethereal password
-            },
-        });
-
-        // 3. Define the email options
         const message = {
-            from: '"College Portal Admin" <admin@collegeportal.com>',
+            from: process.env.EMAIL_FROM || '"College Portal Admin" <admin@collegeportal.com>',
             to: options.email,
             subject: options.subject,
             text: options.message,
             html: options.html || `<p>${options.message}</p>`,
         };
 
-        // 4. Send the email
         const info = await transporter.sendMail(message);
-
         console.log('Message sent: %s', info.messageId);
-        
-        // 5. Log the preview URL so you can click it in the terminal to view the fake email
-        console.log('Preview URL: %s', nodemailer.getTestMessageUrl(info));
-
+        const previewUrl = isPreview ? nodemailer.getTestMessageUrl(info) : null;
+        if (previewUrl) console.log('Preview URL: %s', previewUrl);
+        return { sent: true, previewUrl };
     } catch (error) {
         console.error('Error sending email:', error);
+        return { sent: false, previewUrl: null };
     }
 };
 
